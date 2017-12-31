@@ -13,23 +13,33 @@ import java.io.InputStream;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Properties;
+import java.util.Set;
 import java.util.function.Function;
 
 public class PomParser {
 
     private static final Logger LOG = LoggerFactory.getLogger(PomParser.class);
     private static final String URL_PATTERN = "http://central.maven.org/maven2/%s/%s/%s/%s-%s.pom";
+    private static final Set<String> registered = new HashSet<>();
 
     public Artifact parse(Artifact root) {
-        LOG.info(root.getGroupId() + ":" + root.getArtifactId() + ":" + root.getVersion());
+        String fullName = root.getGroupId() + ":" + root.getArtifactId() + ":" + root.getVersion();
+        LOG.info(fullName);
+
+        if (registered.contains(fullName)) {
+            LOG.info("Already parsed. Check for circularity.");
+            return root;
+        } else {
+            registered.add(fullName);
+        }
 
         MavenXpp3Reader reader = new MavenXpp3Reader();
         Model model = null;
 
-        try {
-            InputStream is = getPomStream(root);
+        try (InputStream is = getPomStream(root)) {
             if(is != null) {
                 try {
                     model = reader.read(is);
@@ -38,21 +48,23 @@ public class PomParser {
                 }
 
                 if (model != null) {
-                    root.getDependencies().addAll(parseDependencies(model.getDependencies(), model.getProperties()));
+                    Properties properties = new Properties();
+                    properties.putAll(model.getProperties());
+                    properties.setProperty("${project.version}", root.getVersion());
+                    properties.setProperty("${version}", root.getVersion());
+
+                    root.getDependencies().addAll(parseDependencies(model.getDependencies(), properties));
                     if (model.getDependencyManagement() != null) {
                         root.getDependencies().addAll(parseDependencies(model.getDependencyManagement().getDependencies(),
-                                model.getProperties()));
+                                properties));
                     }
                 }
-
-                is.close();
             } else {
                 LOG.info("Didn't find pom file");
             }
         } catch (Exception e) {
             throw new RuntimeException(e);
-        }                LOG.info("Camelized artifact Id");
-
+        }
 
         return root;
     }
